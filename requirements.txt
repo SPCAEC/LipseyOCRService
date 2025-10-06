@@ -2,6 +2,6 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
 openai>=1.40.0
-pymupdf==1.24.9           # PDF → image pages
-Pillow==10.4.0            # image helpers
-python-multipart==0.0.9   # FastAPI body parsing
+PyMuPDF==1.24.9 --only-binary=:all:
+Pillow==10.4.0
+python-multipart==0.0.9
