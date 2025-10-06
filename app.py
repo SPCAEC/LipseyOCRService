@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from openai import OpenAI
 
+# ---- Environment and setup ----
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY")  # shared secret with Apps Script
 if not OPENAI_API_KEY:
@@ -14,12 +15,15 @@ app = FastAPI(title="Lipsey OCR Service")
 
 # ---- Request model ----
 class ProcessPayload(BaseModel):
-    fileBase64: str                 # base64 of the PDF (no data: prefix)
+    fileBase64: str
     filename: str = "receipt.pdf"
-    max_pages: int = 2              # process first N pages
+    max_pages: int = 2
 
+
+# ---- Utilities ----
 def data_url_from_png_bytes(b: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(b).decode("utf-8")
+
 
 def pdf_to_page_pngs(pdf_bytes: bytes, max_pages: int = 2, dpi: int = 200) -> list[bytes]:
     """Render first N PDF pages to PNG bytes."""
@@ -28,59 +32,96 @@ def pdf_to_page_pngs(pdf_bytes: bytes, max_pages: int = 2, dpi: int = 200) -> li
     pages = min(len(doc), max_pages)
     for i in range(pages):
         page = doc.load_page(i)
-        mat = fitz.Matrix(dpi/72.0, dpi/72.0)
+        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         images.append(pix.tobytes("png"))
     doc.close()
     return images
 
-def build_prompt() -> str:
+
+# ---- Prompt builders ----
+def build_system_prompt() -> str:
     return (
-        "You are a structured data extractor for veterinary clinic receipts. "
-        "You will receive one or more page images of a receipt. Extract the fields below "
-        "and return ONLY a single valid JSON object (no commentary, no code fences):\n\n"
-        "{\n"
-        '  "FirstName": "",\n'
-        '  "LastName": "",\n'
-        '  "StandardizedName": "",\n'
-        '  "ZipCode": "",\n'
-        '  "GrantEligibility": "",\n'
-        '  "InvoiceDate": "",\n'
-        '  "InvoiceNumber": "",\n'
-        '  "ReceiptDate": "",\n'
-        '  "ReceiptNumber": "",\n'
-        '  "AmountPaid": "",\n'
-        '  "Payment": ""\n'
-        "}\n\n"
-        "Rules:\n"
-        "- FirstName: first word in the first line of the Client block.\n"
-        "- LastName: last word in that line.\n"
-        '- StandardizedName: the same line in proper case (e.g., "Lusita Gains").\n'
-        "- ZipCode: last 5 digits in the third line of the Client block.\n"
-        '- GrantEligibility: 14211 or 14215 → "PFL"; 14208 → "Incubator"; else → "Ineligible".\n'
-        '- InvoiceDate: the "Date" shown under "Invoice Number".\n'
-        '- InvoiceNumber: the value labeled "Invoice Number".\n'
-        '- ReceiptDate: the "Payment Entry Date".\n'
-        '- ReceiptNumber: the "Receipt Number".\n'
-        '- AmountPaid: the "Amount Paid" value.\n'
-        '- Payment: the text following "Payment", e.g., "Pets for Life $140.32".\n'
-        "Missing values should be empty strings."
+        "You are a document extraction AI that parses veterinary clinic receipts "
+        "and returns strict JSON output.\n\n"
+        "Each receipt PDF includes three logical sections:\n"
+        "1. A client information block (name, address, ZIP).\n"
+        "2. A header block (invoice and receipt details, payment summary).\n"
+        "3. A service table with columns: Patient, Provider, Description, Date, Quantity, "
+        "Subtotal, Tax, and Total.\n\n"
+        "Your task:\n"
+        "• Identify and extract the client-level data.\n"
+        "• Parse only valid service table rows (ignore header rows, 'Subtotal' or 'Tax' lines, "
+        "and totals at the very bottom).\n"
+        "• Group services by Patient name.\n"
+        "• For each patient, calculate the numeric sum of their 'Total' column and include it "
+        "as PatientTotal.\n"
+        "• Return clean JSON only—no commentary, no markdown.\n\n"
+        "All dates should remain as text exactly as shown (e.g. '10/6/2025').\n"
+        "All monetary amounts should include a leading '$' and two decimals."
     )
 
+
+def build_user_prompt() -> str:
+    return (
+        "Extract the following structured information from this veterinary clinic receipt PDF.\n\n"
+        "For the client-level fields, include:\n"
+        "- FirstName\n"
+        "- LastName\n"
+        "- StandardizedName (proper case full name)\n"
+        "- ZipCode\n"
+        "- GrantEligibility (based on ZIP: 14211 or 14215 = 'PFL'; 14208 = 'Incubator'; "
+        "all others = 'Ineligible')\n"
+        "- InvoiceDate\n"
+        "- InvoiceNumber\n"
+        "- ReceiptDate\n"
+        "- ReceiptNumber\n"
+        "- AmountPaid\n"
+        "- Payment\n\n"
+        "Then, from the 'Payment History' or similar service table, capture rows that contain:\n"
+        "- Patient\n"
+        "- Provider\n"
+        "- Description\n"
+        "- Date\n"
+        "- Quantity\n"
+        "- Total  ← (ignore Subtotal and Tax columns entirely)\n\n"
+        "Group rows by Patient name and include, for each patient:\n"
+        "- Name\n"
+        "- Provider (use the main provider if repeated)\n"
+        "- Items[] (list of their services)\n"
+        "- PatientTotal (sum of all 'Total' values for that patient)\n\n"
+        "Return one valid JSON object in the exact structure below:\n"
+        "{\n"
+        "  'Client': { ...fields... },\n"
+        "  'Patients': [\n"
+        "    {\n"
+        "      'Name': '',\n"
+        "      'Provider': '',\n"
+        "      'PatientTotal': '',\n"
+        "      'Items': [ { 'Description': '', 'Date': '', 'Quantity': '', 'Total': '' } ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "If information is missing or illegible, use an empty string for that field."
+    )
+
+
+# ---- Endpoint ----
 @app.post("/process")
 async def process(req: Request, payload: ProcessPayload):
-    # Simple shared-secret check (prevents public abuse)
+    # --- Auth check ---
     if SERVICE_API_KEY:
         incoming = req.headers.get("X-API-Key")
         if incoming != SERVICE_API_KEY:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
+    # --- Decode PDF ---
     try:
         pdf_bytes = base64.b64decode(payload.fileBase64)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid base64")
 
-    # PDF → first N page PNGs
+    # --- Render PDF pages to PNGs ---
     try:
         png_pages = pdf_to_page_pngs(pdf_bytes, max_pages=payload.max_pages, dpi=220)
         if not png_pages:
@@ -88,31 +129,29 @@ async def process(req: Request, payload: ProcessPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF render failed: {e}")
 
-    # Build Chat Completions messages with data URLs for images
+    # --- Build messages ---
     messages = [
-        {
-            "role": "system",
-            "content": "You are a precise, careful data extractor. Always return valid JSON."
-        },
+        {"role": "system", "content": build_system_prompt()},
         {
             "role": "user",
-            "content": [{"type": "text", "text": build_prompt()}] +
-                       [{"type": "image_url", "image_url": {"url": data_url_from_png_bytes(p)}} for p in png_pages]
-        }
+            "content": [{"type": "text", "text": build_user_prompt()}]
+            + [
+                {"type": "image_url", "image_url": {"url": data_url_from_png_bytes(p)}}
+                for p in png_pages
+            ],
+        },
     ]
 
+    # --- Send to OpenAI ---
     try:
-        # Use vision-capable model and force JSON output
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             temperature=0,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
         content = resp.choices[0].message.content or ""
-        # Validate JSON
         data = json.loads(content)
         return data
     except Exception as e:
-        # Return a useful error for Apps Script logs
         raise HTTPException(status_code=500, detail=f"OpenAI error: {e}")
