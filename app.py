@@ -17,7 +17,7 @@ app = FastAPI(title="Lipsey OCR Service")
 class ProcessPayload(BaseModel):
     fileBase64: str
     filename: str = "receipt.pdf"
-    max_pages: int = 2
+    max_pages: int = 4
 
 
 # ---- Utilities ----
@@ -114,6 +114,12 @@ async def process(req: Request, payload: ProcessPayload):
         incoming = req.headers.get("X-API-Key")
         if incoming != SERVICE_API_KEY:
             raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # --- Clamp page count ---
+    payload.max_pages = min(payload.max_pages or 4, 4)
+
+    try:
+        pdf_bytes = base64.b64decode(payload.fileBase64)
 
     # --- Decode PDF ---
     try:
