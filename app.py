@@ -22,10 +22,11 @@ class ProcessPayload(BaseModel):
 
 # ---- Utilities ----
 def data_url_from_png_bytes(b: bytes) -> str:
+    """Convert PNG bytes to a data URL for OpenAI image input."""
     return "data:image/png;base64," + base64.b64encode(b).decode("utf-8")
 
 
-def pdf_to_page_pngs(pdf_bytes: bytes, max_pages: int = 2, dpi: int = 200) -> list[bytes]:
+def pdf_to_page_pngs(pdf_bytes: bytes, max_pages: int = 4, dpi: int = 200) -> list[bytes]:
     """Render first N PDF pages to PNG bytes."""
     images = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -118,14 +119,11 @@ async def process(req: Request, payload: ProcessPayload):
     # --- Clamp page count ---
     payload.max_pages = min(payload.max_pages or 4, 4)
 
-    try:
-        pdf_bytes = base64.b64decode(payload.fileBase64)
-
     # --- Decode PDF ---
     try:
         pdf_bytes = base64.b64decode(payload.fileBase64)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
 
     # --- Render PDF pages to PNGs ---
     try:
@@ -135,7 +133,7 @@ async def process(req: Request, payload: ProcessPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF render failed: {e}")
 
-    # --- Build messages ---
+    # --- Build messages for GPT ---
     messages = [
         {"role": "system", "content": build_system_prompt()},
         {
