@@ -73,51 +73,18 @@ def build_system_prompt() -> str:
         "  • A service table titled or near 'Payment History' with columns: "
         "Patient, Provider, Description, Date, Quantity, Total.\n\n"
         "Rules:\n"
-        "  1) The service table may CONTINUE across multiple pages. Treat all pages as one continuous table.\n"
-        "  2) Return EVERY data row. Do NOT omit rows with $0.00, discounts, or strike-through pricing; "
-        "     include the row if a 'Total' value is present for that row.\n"
-        "  3) Ignore only Subtotal and Tax summary lines (do not add them as Items).\n"
-        "  4) Associate each row with its Patient by the Patient column; group rows by patient name exactly as printed.\n"
-        "  5) For each patient, PatientTotal = sum of that patient's 'Total' values.\n"
-        "  6) Output strict JSON only (no commentary or markdown).\n"
-        "  7) Dates remain exactly as seen (e.g., '10/6/2025'). Amounts have a leading '$' and two decimals.\n"
-    )
-
-
-def build_user_prompt() -> str:
-    return (
-        "Extract the following:\n\n"
-        "Client fields:\n"
-        "- FirstName\n"
-        "- LastName\n"
-        "- StandardizedName (proper case full name)\n"
-        "- ZipCode\n"
-        "- GrantEligibility (ZIP: 14211 or 14215 = 'PFL'; 14208 = 'Incubator'; else 'Ineligible')\n"
-        "- InvoiceDate\n"
-        "- InvoiceNumber\n"
-        "- ReceiptDate\n"
-        "- ReceiptNumber\n"
-        "- AmountPaid\n"
-        "- Payment\n\n"
-        "Service table extraction from ALL pages (the table may continue across pages):\n"
-        "- For EVERY data row (not header, not Subtotal, not Tax), capture: "
-        "Patient, Provider, Description, Date, Quantity, Total\n"
-        "- Group rows by Patient name.\n"
-        "- For each patient, return: Name, Provider (dominant provider if repeated), PatientTotal, "
-        "Items[] with objects { Description, Date, Quantity, Total }\n\n"
-        "Return exactly this JSON structure (and nothing else):\n"
-        "{\n"
-        "  'Client': { ... },\n"
-        "  'Patients': [\n"
-        "    {\n"
-        "      'Name': '',\n"
-        "      'Provider': '',\n"
-        "      'PatientTotal': '',\n"
-        "      'Items': [ { 'Description': '', 'Date': '', 'Quantity': '', 'Total': '' } ]\n"
-        "    }\n"
-        "  ]\n"
-        "}\n"
-        "If a field is missing, use an empty string.\n"
+        "- FirstName: first word in the first line of the Client block.\n"
+        "- LastName: last word in that line.\n"
+        '- StandardizedName: the same line in proper case (e.g., "Lusita Gains").\n'
+        "- ZipCode: last 5 digits in the third line of the Client block.\n"
+        '- GrantEligibility: 14211 or 14215 → "PFL"; 14208 → "Incubator"; else → "Extended Incubator".\n'
+        '- InvoiceDate: the "Date" shown under "Invoice Number".\n'
+        '- InvoiceNumber: the value labeled "Invoice Number".\n'
+        '- ReceiptDate: the "Payment Entry Date".\n'
+        '- ReceiptNumber: the "Receipt Number".\n'
+        '- AmountPaid: the "Amount Paid" value.\n'
+        '- Payment: the text following "Payment", e.g., "Pets for Life $140.32".\n'
+        "Missing values should be empty strings."
     )
 
 
