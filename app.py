@@ -1,14 +1,12 @@
 import os
-import io
 import base64
-import tempfile
+import fitz  # PyMuPDF
 from typing import Optional
 
-import fitz  # PyMuPDF
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="PDF to PNG Converter", version="1.0.0")
+app = FastAPI(title="PDF to PNG Converter", version="1.1.0")
 
 API_KEY = os.getenv("PDF_RENDER_API_KEY", "").strip()
 
@@ -19,6 +17,8 @@ class ConvertRequest(BaseModel):
     max_pages: Optional[int] = 3
     format: Optional[str] = "png"
     dpi: Optional[int] = 150
+    include_text: Optional[bool] = True
+    text_max_chars: Optional[int] = 4000
 
 
 @app.get("/health")
@@ -32,8 +32,8 @@ def convert_pdf(
     x_api_key: Optional[str] = Header(default=None)
 ):
     if API_KEY:
-      if not x_api_key or x_api_key != API_KEY:
-          raise HTTPException(status_code=401, detail="Unauthorized")
+        if not x_api_key or x_api_key != API_KEY:
+            raise HTTPException(status_code=401, detail="Unauthorized")
 
     if not req.fileBase64:
         raise HTTPException(status_code=400, detail="fileBase64 is required")
@@ -43,6 +43,8 @@ def convert_pdf(
 
     max_pages = max(1, min(int(req.max_pages or 3), 3))
     dpi = max(72, min(int(req.dpi or 150), 300))
+    include_text = bool(req.include_text)
+    text_max_chars = max(200, min(int(req.text_max_chars or 4000), 20000))
 
     try:
         pdf_bytes = base64.b64decode(req.fileBase64)
@@ -65,15 +67,25 @@ def convert_pdf(
 
         for i in range(pages_to_process):
             page = doc.load_page(i)
+
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             png_bytes = pix.tobytes("png")
             png_b64 = base64.b64encode(png_bytes).decode("utf-8")
+
+            text_snippet = ""
+            if include_text:
+                try:
+                    text_snippet = page.get_text() or ""
+                    text_snippet = text_snippet[:text_max_chars]
+                except Exception:
+                    text_snippet = ""
 
             out_pages.append({
                 "page": i + 1,
                 "filename": f"page_{i + 1}.png",
                 "mimeType": "image/png",
-                "base64": png_b64
+                "base64": png_b64,
+                "textSnippet": text_snippet
             })
 
         return {
@@ -82,6 +94,7 @@ def convert_pdf(
             "page_count": page_count,
             "processed_pages": pages_to_process,
             "format": "png",
+            "include_text": include_text,
             "pages": out_pages
         }
 
