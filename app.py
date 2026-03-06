@@ -6,9 +6,10 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="PDF to PNG Converter", version="1.1.0")
+app = FastAPI(title="PDF to PNG Converter", version="1.2.0")
 
 API_KEY = os.getenv("PDF_RENDER_API_KEY", "").strip()
+MAX_PDF_BYTES = 15 * 1024 * 1024  # 15 MB
 
 
 class ConvertRequest(BaseModel):
@@ -47,9 +48,17 @@ def convert_pdf(
     text_max_chars = max(200, min(int(req.text_max_chars or 4000), 20000))
 
     try:
-        pdf_bytes = base64.b64decode(req.fileBase64)
+        pdf_bytes = base64.b64decode(req.fileBase64, validate=True)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid base64 PDF payload")
+
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="Decoded PDF is empty")
+
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="PDF exceeds maximum allowed size")
+
+    safe_filename = (req.filename or "document.pdf").strip()[:200]
 
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -90,7 +99,7 @@ def convert_pdf(
 
         return {
             "ok": True,
-            "filename": req.filename,
+            "filename": safe_filename,
             "page_count": page_count,
             "processed_pages": pages_to_process,
             "format": "png",
