@@ -15,7 +15,7 @@ MAX_PDF_BYTES = 15 * 1024 * 1024  # 15 MB
 class ConvertRequest(BaseModel):
     fileBase64: str
     filename: Optional[str] = "document.pdf"
-    max_pages: Optional[int] = 3
+    max_pages: Optional[int] = 2
     format: Optional[str] = "png"
     dpi: Optional[int] = 150
     include_text: Optional[bool] = True
@@ -42,7 +42,7 @@ def convert_pdf(
     if (req.format or "png").lower() != "png":
         raise HTTPException(status_code=400, detail="Only png format is supported")
 
-    max_pages = max(1, min(int(req.max_pages or 3), 3))
+    max_pages = max(1, min(int(req.max_pages or 2), 2))
     dpi = max(72, min(int(req.dpi or 150), 300))
     include_text = bool(req.include_text)
     text_max_chars = max(200, min(int(req.text_max_chars or 4000), 20000))
